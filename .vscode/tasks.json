@@ -4,26 +4,11 @@
         {
             "label": "build-gui",
             "type": "shell",
-            "command": "cl",
+            "command": "cmd",
             "args": [
-                "/O2",
-                "/MT",
-                "/EHsc",
-                "/DWIN32",
-                "/D_WINDOWS",
-                "osc_trigger_gui.cpp",
-                "/link",
-                "ws2_32.lib",
-                "user32.lib",
-                "comctl32.lib",
-                "/SUBSYSTEM:WINDOWS"
+                "/c",
+                "\"\"C:\\Program Files\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Auxiliary\\Build\\vcvars64.bat\" && cl /O2 /MT /EHsc /DWIN32 /D_WINDOWS osc_trigger_gui.cpp /link ws2_32.lib user32.lib comctl32.lib /SUBSYSTEM:WINDOWS\""
             ],
-            "options": {
-                "shell": {
-                    "executable": "cmd.exe",
-                    "args": ["/c", "\"C:\\Program Files\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Auxiliary\\Build\\vcvars64.bat\" && "]
-                }
-            },
             "group": {
                 "kind": "build",
                 "isDefault": true
