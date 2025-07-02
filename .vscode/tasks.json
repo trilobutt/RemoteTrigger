@@ -1,0 +1,26 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build-gui",
+            "type": "shell",
+            "command": "g++",
+            "args": [
+                "-O3",
+                "-static",
+                "-std=c++17",
+                "-mwindows",
+                "osc_trigger_gui.cpp",
+                "-lws2_32",
+                "-luser32",
+                "-lcomctl32",
+                "-o",
+                "osc_trigger_gui.exe"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        }
+    ]
+}
