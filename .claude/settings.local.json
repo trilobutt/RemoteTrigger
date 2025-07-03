@@ -9,7 +9,9 @@
       "Bash(./test_key_parsing)",
       "Bash(rm:*)",
       "Bash(git rm:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(cmd:*)",
+      "Bash(\"C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\Common7\\Tools\\VsDevCmd.bat\")"
     ],
     "deny": []
   }

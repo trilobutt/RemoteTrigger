@@ -15,9 +15,9 @@
 #pragma comment(lib, "comctl32.lib")
 
 // Control IDs
-#define ID_WINDOW_EDIT      1001
+#define ID_WINDOW_COMBO     1001
 #define ID_PORT_EDIT        1002
-#define ID_KEY_COMBO        1003
+#define ID_KEY_EDIT         1003
 #define ID_VALUE_EDIT       1004
 #define ID_ADDRESS_EDIT     1005
 #define ID_START_BUTTON     1006
@@ -25,6 +25,8 @@
 #define ID_STATUS_EDIT      1008
 #define ID_IP_EDIT          1009
 #define ID_WINDOW_SELECT    1010
+#define ID_KEY_CAPTURE      1011
+#define ID_KEY_DISPLAY      1012
 
 struct Config {
     std::string windowTitle = "YourTargetWindow";
@@ -217,56 +219,6 @@ public:
     bool IsRunning() const { return running; }
 };
 
-// Global variables
-OSCTrigger* g_trigger = nullptr;
-std::thread* g_listenerThread = nullptr;
-
-bool IsValidKeyString(const std::string& keyString) {
-    if (keyString.empty()) return false;
-    
-    std::string upper = keyString;
-    std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
-    
-    // Remove modifiers to check base key
-    if (upper.find("CTRL+") != std::string::npos) {
-        upper = upper.substr(upper.find("CTRL+") + 5);
-    }
-    if (upper.find("SHIFT+") != std::string::npos) {
-        upper = upper.substr(upper.find("SHIFT+") + 6);
-    }
-    if (upper.find("ALT+") != std::string::npos) {
-        upper = upper.substr(upper.find("ALT+") + 4);
-    }
-    
-    // Check if remaining key is valid
-    return StringToVK(upper) != VK_SPACE || upper == "SPACE";
-}
-
-void ParseKeyString(const std::string& keyString, Config& config) {
-    std::string upper = keyString;
-    std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
-    
-    config.useCtrl = false;
-    config.useShift = false;
-    config.useAlt = false;
-    
-    // Check for modifier keys
-    if (upper.find("CTRL+") != std::string::npos) {
-        config.useCtrl = true;
-        upper = upper.substr(upper.find("CTRL+") + 5);
-    }
-    if (upper.find("SHIFT+") != std::string::npos) {
-        config.useShift = true;
-        upper = upper.substr(upper.find("SHIFT+") + 6);
-    }
-    if (upper.find("ALT+") != std::string::npos) {
-        config.useAlt = true;
-        upper = upper.substr(upper.find("ALT+") + 4);
-    }
-    
-    config.triggerKey = StringToVK(upper);
-}
-
 int StringToVK(const std::string& key) {
     // Basic keys
     if (key == "SPACE") return VK_SPACE;
@@ -323,6 +275,59 @@ int StringToVK(const std::string& key) {
     return VK_SPACE; // Default fallback
 }
 
+// Global variables
+OSCTrigger* g_trigger = nullptr;
+std::thread* g_listenerThread = nullptr;
+bool g_capturingKey = false;
+HWND g_keyEditHwnd = nullptr;
+WNDPROC g_originalKeyEditProc = nullptr;
+
+bool IsValidKeyString(const std::string& keyString) {
+    if (keyString.empty()) return false;
+    
+    std::string upper = keyString;
+    std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
+    
+    // Remove modifiers to check base key
+    if (upper.find("CTRL+") != std::string::npos) {
+        upper = upper.substr(upper.find("CTRL+") + 5);
+    }
+    if (upper.find("SHIFT+") != std::string::npos) {
+        upper = upper.substr(upper.find("SHIFT+") + 6);
+    }
+    if (upper.find("ALT+") != std::string::npos) {
+        upper = upper.substr(upper.find("ALT+") + 4);
+    }
+    
+    // Check if remaining key is valid
+    return StringToVK(upper) != VK_SPACE || upper == "SPACE";
+}
+
+void ParseKeyString(const std::string& keyString, Config& config) {
+    std::string upper = keyString;
+    std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
+    
+    config.useCtrl = false;
+    config.useShift = false;
+    config.useAlt = false;
+    
+    // Check for modifier keys
+    if (upper.find("CTRL+") != std::string::npos) {
+        config.useCtrl = true;
+        upper = upper.substr(upper.find("CTRL+") + 5);
+    }
+    if (upper.find("SHIFT+") != std::string::npos) {
+        config.useShift = true;
+        upper = upper.substr(upper.find("SHIFT+") + 6);
+    }
+    if (upper.find("ALT+") != std::string::npos) {
+        config.useAlt = true;
+        upper = upper.substr(upper.find("ALT+") + 4);
+    }
+    
+    config.triggerKey = StringToVK(upper);
+}
+
 std::string GetWindowText(HWND hwnd) {
     int len = GetWindowTextLength(hwnd);
     std::string result(len, 0);
@@ -347,28 +352,29 @@ BOOL CALLBACK EnumWindowsProc(HWND hwnd, LPARAM lParam) {
     return TRUE;
 }
 
-void ShowWindowSelectionDialog(HWND parent) {
+void RefreshWindowList(HWND parent) {
+    HWND combo = GetDlgItem(parent, ID_WINDOW_COMBO);
+    
+    // Clear existing items
+    SendMessage(combo, CB_RESETCONTENT, 0, 0);
+    
+    // Get current windows
     g_windows.clear();
     EnumWindows(EnumWindowsProc, 0);
     
     if (g_windows.empty()) {
-        MessageBoxA(parent, "No windows found", "Window Selection", MB_OK | MB_ICONINFORMATION);
+        SendMessage(combo, CB_ADDSTRING, 0, (LPARAM)"No windows found");
         return;
     }
     
-    std::string windowList = "Select a window:\n\n";
-    for (size_t i = 0; i < g_windows.size() && i < 20; ++i) {
-        windowList += std::to_string(i + 1) + ". " + g_windows[i].title + "\n";
+    // Add windows to combo box
+    for (const auto& window : g_windows) {
+        SendMessage(combo, CB_ADDSTRING, 0, (LPARAM)window.title.c_str());
     }
     
-    std::string input = "1";
-    char buffer[10];
-    if (MessageBoxA(parent, windowList.c_str(), "Window Selection", MB_OKCANCEL | MB_ICONQUESTION) == IDOK) {
-        // Simple input dialog - for now we'll use the first window
-        // In a full implementation, you'd want a proper dialog
-        if (!g_windows.empty()) {
-            SetDlgItemTextA(parent, ID_WINDOW_EDIT, g_windows[0].title.c_str());
-        }
+    // Select first item if available
+    if (!g_windows.empty()) {
+        SendMessage(combo, CB_SETCURSEL, 0, 0);
     }
 }
 
@@ -376,14 +382,22 @@ void StartListener(HWND hwnd) {
     if (g_trigger && g_trigger->IsRunning()) return;
     
     Config config;
-    config.windowTitle = GetWindowText(GetDlgItem(hwnd, ID_WINDOW_EDIT));
+    
+    // Get selected window from combo box
+    int sel = SendMessage(GetDlgItem(hwnd, ID_WINDOW_COMBO), CB_GETCURSEL, 0, 0);
+    if (sel != CB_ERR && sel < g_windows.size()) {
+        config.windowTitle = g_windows[sel].title;
+    } else {
+        config.windowTitle = GetWindowText(GetDlgItem(hwnd, ID_WINDOW_COMBO));
+    }
+    
     config.ipAddress = GetWindowText(GetDlgItem(hwnd, ID_IP_EDIT));
     config.port = GetDlgItemInt(hwnd, ID_PORT_EDIT, nullptr, FALSE);
     config.targetValue = GetDlgItemInt(hwnd, ID_VALUE_EDIT, nullptr, FALSE);
     config.oscAddress = GetWindowText(GetDlgItem(hwnd, ID_ADDRESS_EDIT));
     
     char keyText[50];
-    GetDlgItemTextA(hwnd, ID_KEY_COMBO, keyText, sizeof(keyText));
+    GetDlgItemTextA(hwnd, ID_KEY_EDIT, keyText, sizeof(keyText));
     config.keyString = keyText;
     
     // Validate key combination
@@ -423,55 +437,286 @@ void StopListener(HWND hwnd) {
     }
 }
 
+LRESULT CALLBACK KeyCaptureProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    // If we're capturing a key, handle all messages here and don't pass them to the original proc
+    if (g_capturingKey) {
+        switch (uMsg) {
+        case WM_KEYDOWN:
+        case WM_SYSKEYDOWN:
+            {
+                std::string keyStr = "";
+                
+                // Get main key first
+                int vk = wParam;
+                std::string mainKey = "";
+                
+                if (vk == VK_SPACE) mainKey = "SPACE";
+                else if (vk == VK_RETURN) mainKey = "ENTER";
+                else if (vk == VK_TAB) mainKey = "TAB";
+                else if (vk == VK_ESCAPE) mainKey = "ESC";
+                else if (vk >= VK_F1 && vk <= VK_F12) mainKey = "F" + std::to_string(vk - VK_F1 + 1);
+                else if (vk >= 'A' && vk <= 'Z') mainKey = (char)vk;
+                else if (vk >= '0' && vk <= '9') mainKey = (char)vk;
+                else if (vk == VK_LEFT) mainKey = "LEFT";
+                else if (vk == VK_RIGHT) mainKey = "RIGHT";
+                else if (vk == VK_UP) mainKey = "UP";
+                else if (vk == VK_DOWN) mainKey = "DOWN";
+                else return 0; // Unknown key, ignore
+                
+                // Check for modifier keys and build the string
+                if (GetKeyState(VK_CONTROL) & 0x8000) keyStr += "CTRL+";
+                if (GetKeyState(VK_SHIFT) & 0x8000) keyStr += "SHIFT+";
+                if (GetKeyState(VK_MENU) & 0x8000) keyStr += "ALT+";
+                
+                keyStr += mainKey;
+                
+                // Complete the capture
+                g_capturingKey = false;
+                SetWindowTextA(GetDlgItem(GetParent(hwnd), ID_KEY_CAPTURE), "Click to Capture Key");
+                
+                // Set the text only - let EN_CHANGE handle the display update
+                SendMessageA(hwnd, WM_SETTEXT, 0, (LPARAM)keyStr.c_str());
+                
+                return 0;
+            }
+            break;
+            
+        case WM_CHAR:
+        case WM_SYSCHAR:
+        case WM_KEYUP:
+        case WM_SYSKEYUP:
+            // Block all other keyboard messages during capture
+            return 0;
+            
+        default:
+            // Allow other messages to pass through
+            break;
+        }
+    }
+    
+    if (g_originalKeyEditProc) {
+        return CallWindowProcA(g_originalKeyEditProc, hwnd, uMsg, wParam, lParam);
+    }
+    return DefWindowProcA(hwnd, uMsg, wParam, lParam);
+}
+
+void ResizeControls(HWND hwnd) {
+    RECT rect;
+    GetClientRect(hwnd, &rect);
+    int width = rect.right - rect.left;
+    int height = rect.bottom - rect.top;
+    
+    // Calculate responsive dimensions with margins
+    int margin = 10;
+    int labelWidth = 100;
+    int controlHeight = 20;
+    int buttonHeight = 30;
+    int spacing = 5;
+    
+    // Calculate available width for controls
+    int availableWidth = width - (margin * 2) - labelWidth - spacing;
+    int controlWidth = max(150, availableWidth);
+    int rightColX = labelWidth + spacing + margin;
+    
+    // Status area height (bottom 1/3 of window)
+    int statusHeight = max(100, height / 3);
+    int statusY = height - statusHeight - margin;
+    
+    // Current Y position for controls
+    int currentY = margin;
+    
+    // Window title selection
+    SetWindowPos(GetDlgItem(hwnd, ID_WINDOW_COMBO), nullptr,
+                rightColX, currentY, controlWidth - 70, controlHeight,
+                SWP_NOZORDER);
+    SetWindowPos(GetDlgItem(hwnd, ID_WINDOW_SELECT), nullptr,
+                rightColX + controlWidth - 65, currentY, 60, controlHeight,
+                SWP_NOZORDER);
+    currentY += controlHeight + spacing;
+    
+    // IP Address
+    SetWindowPos(GetDlgItem(hwnd, ID_IP_EDIT), nullptr,
+                rightColX, currentY, min(150, controlWidth / 2), controlHeight,
+                SWP_NOZORDER);
+    currentY += controlHeight + spacing;
+    
+    // Port
+    SetWindowPos(GetDlgItem(hwnd, ID_PORT_EDIT), nullptr,
+                rightColX, currentY, min(100, controlWidth / 2), controlHeight,
+                SWP_NOZORDER);
+    currentY += controlHeight + spacing;
+    
+    // Trigger key
+    int keyEditWidth = min(100, controlWidth / 2);
+    int captureButtonWidth = min(140, controlWidth - keyEditWidth - spacing);
+    SetWindowPos(GetDlgItem(hwnd, ID_KEY_EDIT), nullptr,
+                rightColX, currentY, keyEditWidth, controlHeight,
+                SWP_NOZORDER);
+    SetWindowPos(GetDlgItem(hwnd, ID_KEY_CAPTURE), nullptr,
+                rightColX + keyEditWidth + spacing, currentY, captureButtonWidth, controlHeight,
+                SWP_NOZORDER);
+    currentY += controlHeight + spacing;
+    
+    // Key display
+    SetWindowPos(GetDlgItem(hwnd, ID_KEY_DISPLAY), nullptr,
+                margin, currentY, width - (margin * 2), controlHeight,
+                SWP_NOZORDER);
+    currentY += controlHeight + spacing;
+    
+    // Target value
+    SetWindowPos(GetDlgItem(hwnd, ID_VALUE_EDIT), nullptr,
+                rightColX, currentY, min(100, controlWidth / 2), controlHeight,
+                SWP_NOZORDER);
+    currentY += controlHeight + spacing;
+    
+    // OSC address
+    SetWindowPos(GetDlgItem(hwnd, ID_ADDRESS_EDIT), nullptr,
+                rightColX, currentY, controlWidth, controlHeight,
+                SWP_NOZORDER);
+    currentY += controlHeight + spacing * 2;
+    
+    // Buttons
+    SetWindowPos(GetDlgItem(hwnd, ID_START_BUTTON), nullptr,
+                margin, currentY, 80, buttonHeight,
+                SWP_NOZORDER);
+    SetWindowPos(GetDlgItem(hwnd, ID_STOP_BUTTON), nullptr,
+                margin + 80 + spacing, currentY, 80, buttonHeight,
+                SWP_NOZORDER);
+    
+    // Status area
+    SetWindowPos(GetDlgItem(hwnd, ID_STATUS_EDIT), nullptr,
+                margin, statusY, width - (margin * 2), statusHeight - margin,
+                SWP_NOZORDER);
+    
+    // Reposition static labels
+    currentY = margin;
+    
+    // Window title label
+    SetWindowPos(FindWindowExA(hwnd, nullptr, "STATIC", "Window Title:"), nullptr,
+                margin, currentY, labelWidth, controlHeight,
+                SWP_NOZORDER);
+    currentY += controlHeight + spacing;
+    
+    // IP Address label
+    SetWindowPos(FindWindowExA(hwnd, nullptr, "STATIC", "IP Address:"), nullptr,
+                margin, currentY, labelWidth, controlHeight,
+                SWP_NOZORDER);
+    currentY += controlHeight + spacing;
+    
+    // Port label
+    SetWindowPos(FindWindowExA(hwnd, nullptr, "STATIC", "Port:"), nullptr,
+                margin, currentY, labelWidth, controlHeight,
+                SWP_NOZORDER);
+    currentY += controlHeight + spacing;
+    
+    // Trigger key label
+    SetWindowPos(FindWindowExA(hwnd, nullptr, "STATIC", "Trigger Key:"), nullptr,
+                margin, currentY, labelWidth, controlHeight,
+                SWP_NOZORDER);
+    currentY += controlHeight + spacing * 2;
+    
+    // Target value label
+    SetWindowPos(FindWindowExA(hwnd, nullptr, "STATIC", "Target Value:"), nullptr,
+                margin, currentY, labelWidth, controlHeight,
+                SWP_NOZORDER);
+    currentY += controlHeight + spacing;
+    
+    // OSC address label
+    SetWindowPos(FindWindowExA(hwnd, nullptr, "STATIC", "OSC Address:"), nullptr,
+                margin, currentY, labelWidth, controlHeight,
+                SWP_NOZORDER);
+    
+    // Status label
+    SetWindowPos(FindWindowExA(hwnd, nullptr, "STATIC", "Status:"), nullptr,
+                margin, statusY - controlHeight - spacing, labelWidth, controlHeight,
+                SWP_NOZORDER);
+}
+
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
     case WM_CREATE:
         {
-            // Window title
+            // Window title selection
             CreateWindowA("STATIC", "Window Title:", WS_VISIBLE | WS_CHILD,
                         10, 10, 100, 20, hwnd, nullptr, nullptr, nullptr);
-            CreateWindowA("EDIT", "YourTargetWindow", WS_VISIBLE | WS_CHILD | WS_BORDER,
-                        120, 10, 200, 20, hwnd, (HMENU)ID_WINDOW_EDIT, nullptr, nullptr);
+            CreateWindowA("COMBOBOX", "", WS_VISIBLE | WS_CHILD | WS_BORDER | CBS_DROPDOWNLIST,
+                        120, 10, 200, 200, hwnd, (HMENU)ID_WINDOW_COMBO, nullptr, nullptr);
+            CreateWindowA("BUTTON", "Refresh", WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
+                        330, 10, 60, 20, hwnd, (HMENU)ID_WINDOW_SELECT, nullptr, nullptr);
+            
+            // IP Address
+            CreateWindowA("STATIC", "IP Address:", WS_VISIBLE | WS_CHILD,
+                        10, 40, 100, 20, hwnd, nullptr, nullptr, nullptr);
+            CreateWindowA("EDIT", "127.0.0.1", WS_VISIBLE | WS_CHILD | WS_BORDER,
+                        120, 40, 100, 20, hwnd, (HMENU)ID_IP_EDIT, nullptr, nullptr);
             
             // Port
             CreateWindowA("STATIC", "Port:", WS_VISIBLE | WS_CHILD,
-                        10, 40, 100, 20, hwnd, nullptr, nullptr, nullptr);
+                        10, 70, 100, 20, hwnd, nullptr, nullptr, nullptr);
             CreateWindowA("EDIT", "55525", WS_VISIBLE | WS_CHILD | WS_BORDER | ES_NUMBER,
-                        120, 40, 100, 20, hwnd, (HMENU)ID_PORT_EDIT, nullptr, nullptr);
+                        120, 70, 100, 20, hwnd, (HMENU)ID_PORT_EDIT, nullptr, nullptr);
             
             // Trigger key
             CreateWindowA("STATIC", "Trigger Key:", WS_VISIBLE | WS_CHILD,
-                        10, 70, 100, 20, hwnd, nullptr, nullptr, nullptr);
-            CreateWindowA("EDIT", "SPACE", WS_VISIBLE | WS_CHILD | WS_BORDER,
-                        120, 70, 100, 20, hwnd, (HMENU)ID_KEY_COMBO, nullptr, nullptr);
-            CreateWindowA("STATIC", "(e.g. SPACE, ENTER, F1, CTRL+A)", WS_VISIBLE | WS_CHILD,
-                        230, 70, 150, 20, hwnd, nullptr, nullptr, nullptr);
+                        10, 100, 100, 20, hwnd, nullptr, nullptr, nullptr);
+            HWND keyEdit = CreateWindowA("EDIT", "SPACE", WS_VISIBLE | WS_CHILD | WS_BORDER,
+                        120, 100, 100, 20, hwnd, (HMENU)ID_KEY_EDIT, nullptr, nullptr);
+            CreateWindowA("BUTTON", "Click to Capture Key", WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
+                        230, 100, 160, 20, hwnd, (HMENU)ID_KEY_CAPTURE, nullptr, nullptr);
+            
+            // Key display confirmation
+            CreateWindowA("STATIC", "Current: SPACE", WS_VISIBLE | WS_CHILD | SS_SUNKEN,
+                        10, 125, 200, 20, hwnd, (HMENU)ID_KEY_DISPLAY, nullptr, nullptr);
+            
+            // Subclass the key edit control
+            g_originalKeyEditProc = (WNDPROC)SetWindowLongPtrA(keyEdit, GWLP_WNDPROC, (LONG_PTR)KeyCaptureProc);
+            g_keyEditHwnd = keyEdit;
             
             // Target value
             CreateWindowA("STATIC", "Target Value:", WS_VISIBLE | WS_CHILD,
-                        10, 100, 100, 20, hwnd, nullptr, nullptr, nullptr);
+                        10, 155, 100, 20, hwnd, nullptr, nullptr, nullptr);
             CreateWindowA("EDIT", "9", WS_VISIBLE | WS_CHILD | WS_BORDER | ES_NUMBER,
-                        120, 100, 100, 20, hwnd, (HMENU)ID_VALUE_EDIT, nullptr, nullptr);
+                        120, 155, 100, 20, hwnd, (HMENU)ID_VALUE_EDIT, nullptr, nullptr);
             
             // OSC address
             CreateWindowA("STATIC", "OSC Address:", WS_VISIBLE | WS_CHILD,
-                        10, 130, 100, 20, hwnd, nullptr, nullptr, nullptr);
+                        10, 185, 100, 20, hwnd, nullptr, nullptr, nullptr);
             CreateWindowA("EDIT", "/flair/runstate", WS_VISIBLE | WS_CHILD | WS_BORDER,
-                        120, 130, 200, 20, hwnd, (HMENU)ID_ADDRESS_EDIT, nullptr, nullptr);
+                        120, 185, 200, 20, hwnd, (HMENU)ID_ADDRESS_EDIT, nullptr, nullptr);
             
             // Buttons
             CreateWindowA("BUTTON", "START", WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
-                        10, 170, 80, 30, hwnd, (HMENU)ID_START_BUTTON, nullptr, nullptr);
+                        10, 220, 80, 30, hwnd, (HMENU)ID_START_BUTTON, nullptr, nullptr);
             CreateWindowA("BUTTON", "STOP", WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
-                        100, 170, 80, 30, hwnd, (HMENU)ID_STOP_BUTTON, nullptr, nullptr);
+                        100, 220, 80, 30, hwnd, (HMENU)ID_STOP_BUTTON, nullptr, nullptr);
             
             // Status
             CreateWindowA("STATIC", "Status:", WS_VISIBLE | WS_CHILD,
-                        10, 210, 100, 20, hwnd, nullptr, nullptr, nullptr);
+                        10, 260, 100, 20, hwnd, nullptr, nullptr, nullptr);
             CreateWindowA("EDIT", "", WS_VISIBLE | WS_CHILD | WS_BORDER | WS_VSCROLL | ES_MULTILINE | ES_READONLY,
-                        10, 230, 420, 150, hwnd, (HMENU)ID_STATUS_EDIT, nullptr, nullptr);
+                        10, 280, 420, 150, hwnd, (HMENU)ID_STATUS_EDIT, nullptr, nullptr);
             
             EnableWindow(GetDlgItem(hwnd, ID_STOP_BUTTON), FALSE);
+            
+            // Initialize window list
+            RefreshWindowList(hwnd);
+            
+            // Initial layout
+            ResizeControls(hwnd);
+        }
+        break;
+        
+    case WM_SIZE:
+        if (wParam != SIZE_MINIMIZED) {
+            ResizeControls(hwnd);
+        }
+        break;
+        
+    case WM_GETMINMAXINFO:
+        {
+            LPMINMAXINFO lpMMI = (LPMINMAXINFO)lParam;
+            lpMMI->ptMinTrackSize.x = 400;
+            lpMMI->ptMinTrackSize.y = 350;
         }
         break;
         
@@ -480,6 +725,19 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             StartListener(hwnd);
         } else if (LOWORD(wParam) == ID_STOP_BUTTON) {
             StopListener(hwnd);
+        } else if (LOWORD(wParam) == ID_WINDOW_SELECT) {
+            RefreshWindowList(hwnd);
+        } else if (LOWORD(wParam) == ID_KEY_CAPTURE) {
+            g_capturingKey = true;
+            SetWindowTextA(GetDlgItem(hwnd, ID_KEY_CAPTURE), "Press a key...");
+            SetFocus(g_keyEditHwnd);
+        } else if (LOWORD(wParam) == ID_KEY_EDIT && HIWORD(wParam) == EN_CHANGE) {
+            // Update key display when text changes
+            std::string keyText = GetWindowText(GetDlgItem(hwnd, ID_KEY_EDIT));
+            if (!keyText.empty()) {
+                std::string displayText = "Current: " + keyText;
+                SetWindowTextA(GetDlgItem(hwnd, ID_KEY_DISPLAY), displayText.c_str());
+            }
         }
         break;
         
@@ -505,20 +763,20 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS);
     
-    const wchar_t* className = L"OSCTriggerGUI";
+    const char* className = "OSCTriggerGUI";
     
-    WNDCLASS wc = {};
+    WNDCLASSA wc = {};
     wc.lpfnWndProc = WindowProc;
     wc.hInstance = hInstance;
     wc.lpszClassName = className;
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
     wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
     
-    RegisterClass(&wc);
+    RegisterClassA(&wc);
     
-    HWND hwnd = CreateWindowW(className, L"OSC Button Trigger",
-        WS_OVERLAPPEDWINDOW & ~WS_MAXIMIZEBOX & ~WS_THICKFRAME,
-        CW_USEDEFAULT, CW_USEDEFAULT, 460, 420,
+    HWND hwnd = CreateWindowA(className, "OSC Button Trigger",
+        WS_OVERLAPPEDWINDOW,
+        CW_USEDEFAULT, CW_USEDEFAULT, 500, 500,
         nullptr, nullptr, hInstance, nullptr);
     
     ShowWindow(hwnd, nCmdShow);
