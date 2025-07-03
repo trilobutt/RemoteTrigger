@@ -11,7 +11,8 @@
       "Bash(git rm:*)",
       "Bash(git add:*)",
       "Bash(cmd:*)",
-      "Bash(\"C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\Common7\\Tools\\VsDevCmd.bat\")"
+      "Bash(\"C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\Common7\\Tools\\VsDevCmd.bat\")",
+      "Bash(touch:*)"
     ],
     "deny": []
   }

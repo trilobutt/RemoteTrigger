@@ -68,3 +68,8 @@ $RECYCLE.BIN/
 *.tmp
 *.temp
 *.log
+
+# Claude Code related files
+CLAUDE.md
+.claude/
+claude-*

@@ -88,7 +88,7 @@ Ctrl+Shift+P > Tasks: Run Task > build-gui
 
 ## Contributing
 
-This project uses standard C++ with Win32 API. See `CLAUDE.md` for development guidelines.
+This project uses standard C++ with Win32 API. Contributions are welcome - please follow standard C++ coding practices and ensure Windows compatibility.
 
 ## License
 
