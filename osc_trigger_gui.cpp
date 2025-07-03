@@ -48,10 +48,11 @@ private:
     sockaddr_in serverAddr;
     Config config;
     std::atomic<bool> running;
+    std::atomic<bool> hasTriggered;
     HWND statusEdit;
     
 public:
-    OSCTrigger(HWND status) : udpSocket(INVALID_SOCKET), running(false), statusEdit(status) {}
+    OSCTrigger(HWND status) : udpSocket(INVALID_SOCKET), running(false), hasTriggered(false), statusEdit(status) {}
     
     bool Start(const Config& cfg) {
         config = cfg;
@@ -108,20 +109,27 @@ public:
         ioctlsocket(udpSocket, FIONBIO, &nonBlocking);
         
         running = true;
+        hasTriggered = false;
         LogStatus("Successfully bound to " + config.ipAddress + ":" + std::to_string(config.port));
         LogStatus("Socket ready for receiving UDP packets");
+        LogStatus("One-shot mode: Will trigger once then stop listening");
         return true;
     }
     
     void Stop() {
+        LogStatus("Stopping listener...");
         running = false;
-        // Give the listener thread time to exit gracefully
-        Sleep(200);
         
+        // Close socket first to break out of any blocking operations
         if (udpSocket != INVALID_SOCKET) {
+            shutdown(udpSocket, SD_BOTH);
             closesocket(udpSocket);
             udpSocket = INVALID_SOCKET;
         }
+        
+        // Give the listener thread time to exit gracefully
+        Sleep(300);
+        
         WSACleanup();
         LogStatus("Stopped");
     }
@@ -272,13 +280,27 @@ public:
             int32_t value = static_cast<int32_t>(rawValue);
             LogStatus("Integer value: " + std::to_string(value) + ", target: " + std::to_string(config.targetValue));
             if (value == config.targetValue) {
-                TriggerButton();
+                if (!hasTriggered) {
+                    TriggerButton();
+                    hasTriggered = true;
+                    LogStatus("One-shot trigger activated - stopping listener");
+                    running = false;
+                } else {
+                    LogStatus("Target value matched but already triggered once - ignoring");
+                }
             }
         } else if (typeTag == 'f') {
             float value = *reinterpret_cast<float*>(&rawValue);
             LogStatus("Float value: " + std::to_string(value) + ", target: " + std::to_string(config.targetValue));
             if (fabs(value - config.targetValue) < 0.01f) {
-                TriggerButton();
+                if (!hasTriggered) {
+                    TriggerButton();
+                    hasTriggered = true;
+                    LogStatus("One-shot trigger activated - stopping listener");
+                    running = false;
+                } else {
+                    LogStatus("Target value matched but already triggered once - ignoring");
+                }
             }
         }
     }
@@ -523,8 +545,10 @@ void StartListener(HWND hwnd) {
     }
     
     if (g_trigger->Start(config)) {
-        g_listenerThread = new std::thread([]{
+        g_listenerThread = new std::thread([hwnd]{
             g_trigger->Listen();
+            // Auto-stop when listener thread exits (after one-shot trigger)
+            PostMessage(hwnd, WM_COMMAND, MAKEWPARAM(ID_STOP_BUTTON, 0), 0);
         });
         
         EnableWindow(GetDlgItem(hwnd, ID_START_BUTTON), FALSE);
