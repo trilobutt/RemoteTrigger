@@ -1,43 +1,56 @@
 # OSC Trigger GUI
 
-A Windows C++ application that creates a GUI for an OSC (Open Sound Control) trigger system. The application listens for OSC messages on a UDP socket and triggers keyboard events when specific OSC values are received.
+A Windows C++ application that listens for OSC (Open Sound Control) messages and triggers keyboard events when specific values are received. Features a one-shot trigger mechanism that stops listening after the first successful match.
 
 ## Features
 
-- **OSC Message Processing**: Handles both individual OSC messages and bundled messages
-- **Real-time GUI**: Win32 API-based interface with live status logging
-- **Configurable Targeting**: Target specific application windows by title
-- **Flexible Key Mapping**: Support for SPACE, ENTER, F1-F5, or single character keys
-- **Value Matching**: Integer and float value comparison with configurable tolerance
-- **Threaded Architecture**: Non-blocking UDP listener with responsive GUI
+- **OSC Message Processing**: Handles both individual OSC messages and OSC bundles
+- **One-Shot Triggering**: Triggers once per session then stops automatically
+- **Configurable IP Binding**: Listen on specific IP addresses or all interfaces (0.0.0.0)
+- **Window Targeting**: Target specific application windows by exact title match
+- **Advanced Key Combinations**: Support for modifier keys (Ctrl, Shift, Alt) and special keys
+- **Real-time Status Logging**: Timestamped debug output with hex data display
+- **Responsive GUI**: Resizable window with automatic control repositioning
 
 ## Quick Start
 
-1. **Download**: Get the pre-built executable `osc_trigger_gui.exe`
-2. **Run**: Double-click to launch the application
-3. **Configure**: Set your target window, UDP port, OSC address, trigger key, and target value
-4. **Start**: Click "Start Listening" to begin monitoring OSC messages
+1. **Run**: Launch `osc_trigger_gui.exe`
+2. **Select Target**: Choose target window from dropdown or refresh to update list
+3. **Configure IP**: Set IP address (use `0.0.0.0` for all interfaces, `127.0.0.1` for localhost)
+4. **Set Parameters**: Configure port, trigger key, target value, and OSC address
+5. **Start**: Click "START" to begin listening (will stop after first trigger)
 
-## Configuration
+## Configuration Options
 
-- **Target Window**: Name of the application window to receive keyboard events
-- **UDP Port**: Port to listen for OSC messages (default: 55525)
-- **OSC Address**: OSC address pattern to match (default: "/flair/runstate")
-- **Trigger Key**: Key to send when target value is matched
-- **Target Value**: Value to trigger on (integer or float)
+### Network Settings
+- **IP Address**: Interface to bind to (default: `0.0.0.0` for all interfaces)
+- **UDP Port**: Port to listen on (default: `55525`)
 
-## Building from Source
+### Trigger Settings
+- **Window Title**: Exact name of target application window
+- **Trigger Key**: Key combination to send (supports modifiers like `CTRL+A`, `SHIFT+F1`)
+- **Target Value**: Integer value that triggers the action (default: `9`)
+- **OSC Address**: OSC address pattern to match (default: `/flair/runstate`)
+
+### Supported Key Formats
+- **Basic Keys**: `SPACE`, `ENTER`, `TAB`, `ESC`, `A`-`Z`, `0`-`9`
+- **Function Keys**: `F1`-`F12`
+- **Arrow Keys**: `LEFT`, `RIGHT`, `UP`, `DOWN`
+- **Modifier Combinations**: `CTRL+A`, `SHIFT+F1`, `ALT+SPACE`
+- **Special Keys**: `BACKSPACE`, `DELETE`, `INSERT`, `HOME`, `END`, `PAGEUP`, `PAGEDOWN`
+
+## Building
 
 ### Prerequisites
 - Windows 10/11
-- Visual Studio Build Tools 2022
-- VS Code (optional, for task integration)
+- Visual Studio Build Tools 2022 or Visual Studio 2022
+- VS Code (optional, for integrated build task)
 
 ### Build Commands
 
-**Using VS Code:**
+**Using VS Code Task:**
 ```
-Ctrl+Shift+P > Tasks: Run Task > build-gui
+Ctrl+Shift+P → Tasks: Run Task → build-gui
 ```
 
 **Command Line:**
@@ -45,51 +58,82 @@ Ctrl+Shift+P > Tasks: Run Task > build-gui
 "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\Tools\VsDevCmd.bat" && cl /O2 /MT /EHsc /DWIN32 /D_WINDOWS osc_trigger_gui.cpp /link ws2_32.lib user32.lib comctl32.lib /SUBSYSTEM:WINDOWS
 ```
 
-### Build Options
-- `/O2` - Optimization for speed
-- `/MT` - Static runtime linking
-- `/EHsc` - C++ exception handling
-- Required libraries: `ws2_32.lib`, `user32.lib`, `comctl32.lib`
+### Build Configuration
+- `/O2`: Speed optimization
+- `/MT`: Static runtime linking (no external dependencies)
+- `/EHsc`: C++ exception handling
+- **Libraries**: `ws2_32.lib` (Winsock2), `user32.lib` (Windows API), `comctl32.lib` (Common Controls)
 
-## Architecture
+## Technical Details
 
-### Core Components
+### Architecture
+- **OSCTrigger Class**: Handles UDP socket operations and OSC message parsing
+- **Win32 GUI**: Native Windows interface with real-time status display
+- **Threaded Design**: Separate thread for network operations to prevent GUI blocking
+- **One-Shot Behavior**: Automatically stops after first successful trigger
 
-1. **OSCTrigger Class** - Handles UDP socket creation and OSC message parsing
-2. **GUI System** - Win32 API-based window with configuration controls
-3. **Configuration Management** - Window targeting and parameter setup
+### OSC Protocol Support
+- **Message Format**: Standard OSC message structure with address, type tags, and values
+- **Bundle Support**: Processes OSC bundles containing multiple messages
+- **Value Types**: Integer (`i`) and float (`f`) values with tolerance matching for floats
+- **Endianness**: Proper big-endian to little-endian conversion for network data
 
-### Technical Details
-
-- **Platform**: Windows-specific (requires Winsock2)
-- **Threading**: Separate thread for UDP listening
-- **Priority**: High priority class for responsive triggering
-- **Error Handling**: Comprehensive socket and Windows API error handling
+### Key Features
+- **Socket Reuse**: Enables address reuse for development workflows
+- **Non-blocking Sockets**: Uses `select()` with timeouts for responsive operation
+- **Error Handling**: Comprehensive error reporting for network and Windows API operations
+- **Memory Management**: Proper cleanup of sockets and threads on shutdown
 
 ## Usage Examples
 
 ### Basic Setup
-1. Set "Target Window" to your application (e.g., "Notepad")
-2. Keep default UDP port (55525)
-3. Set OSC address to match your sender
-4. Choose trigger key (e.g., SPACE)
-5. Set target value to trigger on
+1. Set IP to `0.0.0.0` to listen on all network interfaces
+2. Keep default port `55525`
+3. Select target window from dropdown (e.g., "Notepad")
+4. Set trigger key (e.g., `SPACE` or `CTRL+S`)
+5. Configure target value to match your OSC sender
 
-### Common Use Cases
-- **Live Performance**: Trigger lighting cues from audio software
-- **Automation**: Remote control of Windows applications
-- **Testing**: Simulate keyboard input for application testing
+### Advanced Key Combinations
+- `CTRL+A`: Select all in target application
+- `SHIFT+F1`: Custom shortcut with Shift modifier
+- `ALT+TAB`: Switch windows (use with caution)
+
+### Network Configuration
+- **Local testing**: Use `127.0.0.1` for localhost-only
+- **Network listening**: Use `0.0.0.0` for all interfaces
+- **Specific interface**: Use exact IP address of network adapter
 
 ## Troubleshooting
 
-- **No OSC messages received**: Check firewall settings and UDP port
-- **Target window not found**: Verify exact window title spelling
-- **Keys not working**: Ensure target application has focus capability
+### Common Issues
+- **"Bind failed" error**: Port already in use or invalid IP address
+- **"No windows found"**: Click "Refresh" to update window list
+- **Keys not working**: Ensure target window accepts input and has correct title
+- **No OSC messages**: Check firewall settings and network connectivity
+
+### Debug Information
+- Status log shows timestamped debug information
+- Raw packet data displayed in hexadecimal format
+- Network source information (IP:port) for received messages
+- Detailed OSC message parsing steps
+
+## One-Shot Behavior
+
+This application is designed for single-trigger use cases:
+1. Starts listening when "START" is clicked
+2. Processes OSC messages until target value is matched
+3. Sends configured key combination to target window
+4. Automatically stops listening after first successful trigger
+5. Requires manual restart for additional triggers
 
 ## Contributing
 
-This project uses standard C++ with Win32 API. Contributions are welcome - please follow standard C++ coding practices and ensure Windows compatibility.
+Standard C++ with Win32 API. Key areas for contribution:
+- Additional OSC data type support
+- Multi-trigger modes
+- Configuration file persistence
+- Additional key mapping options
 
 ## License
 
-Open source - feel free to modify and distribute.
+Open source - free to use, modify, and distribute.
