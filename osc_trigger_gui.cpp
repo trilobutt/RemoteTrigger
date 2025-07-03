@@ -281,6 +281,7 @@ std::thread* g_listenerThread = nullptr;
 bool g_capturingKey = false;
 HWND g_keyEditHwnd = nullptr;
 WNDPROC g_originalKeyEditProc = nullptr;
+DWORD g_lastCaptureTime = 0;
 
 bool IsValidKeyString(const std::string& keyString) {
     if (keyString.empty()) return false;
@@ -438,6 +439,10 @@ void StopListener(HWND hwnd) {
 }
 
 LRESULT CALLBACK KeyCaptureProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    // Block character input for 100ms after capturing a key to prevent duplicates
+    DWORD currentTime = GetTickCount();
+    bool recentlyCapture = (currentTime - g_lastCaptureTime) < 100;
+    
     // If we're capturing a key, handle all messages here and don't pass them to the original proc
     if (g_capturingKey) {
         switch (uMsg) {
@@ -472,9 +477,11 @@ LRESULT CALLBACK KeyCaptureProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
                 
                 // Complete the capture
                 g_capturingKey = false;
+                g_lastCaptureTime = currentTime;  // Record capture time
                 SetWindowTextA(GetDlgItem(GetParent(hwnd), ID_KEY_CAPTURE), "Click to Capture Key");
                 
-                // Set the text only - let EN_CHANGE handle the display update
+                // Clear the edit control first, then set the new text
+                SendMessageA(hwnd, WM_SETTEXT, 0, (LPARAM)"");
                 SendMessageA(hwnd, WM_SETTEXT, 0, (LPARAM)keyStr.c_str());
                 
                 return 0;
@@ -492,6 +499,11 @@ LRESULT CALLBACK KeyCaptureProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
             // Allow other messages to pass through
             break;
         }
+    }
+    
+    // Block character messages for a short time after capture to prevent duplicates
+    if (recentlyCapture && (uMsg == WM_CHAR || uMsg == WM_SYSCHAR)) {
+        return 0;
     }
     
     if (g_originalKeyEditProc) {
