@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <vector>
 #include <algorithm>
+#include <cstring>
 
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "user32.lib")
@@ -68,24 +69,55 @@ public:
             return false;
         }
         
+        // Enable socket reuse
+        int reuse = 1;
+        setsockopt(udpSocket, SOL_SOCKET, SO_REUSEADDR, (char*)&reuse, sizeof(reuse));
+        
         serverAddr.sin_family = AF_INET;
-        inet_pton(AF_INET, config.ipAddress.c_str(), &serverAddr.sin_addr);
         serverAddr.sin_port = htons(config.port);
         
+        // Fix: Use the configured IP address
+        if (config.ipAddress == "0.0.0.0" || config.ipAddress.empty()) {
+            serverAddr.sin_addr.s_addr = INADDR_ANY;
+            LogStatus("Binding to all interfaces (0.0.0.0)");
+        } else {
+            if (inet_pton(AF_INET, config.ipAddress.c_str(), &serverAddr.sin_addr) != 1) {
+                LogStatus("Invalid IP address: " + config.ipAddress);
+                closesocket(udpSocket);
+                WSACleanup();
+                return false;
+            }
+            LogStatus("Binding to specific IP: " + config.ipAddress);
+        }
+        
         if (bind(udpSocket, (SOCKADDR*)&serverAddr, sizeof(serverAddr)) == SOCKET_ERROR) {
-            LogStatus("Bind failed on port " + std::to_string(config.port));
+            int errorCode = WSAGetLastError();
+            LogStatus("Bind failed on " + config.ipAddress + ":" + std::to_string(config.port) + " - Error: " + std::to_string(errorCode));
+            if (errorCode == WSAEADDRINUSE) {
+                LogStatus("Port is already in use. Try stopping other applications or use a different port.");
+            } else if (errorCode == WSAEADDRNOTAVAIL) {
+                LogStatus("IP address not available on this machine. Try 0.0.0.0 to listen on all interfaces.");
+            }
             closesocket(udpSocket);
             WSACleanup();
             return false;
         }
         
+        // Set socket to non-blocking mode
+        u_long nonBlocking = 1;
+        ioctlsocket(udpSocket, FIONBIO, &nonBlocking);
+        
         running = true;
-        LogStatus("Listening on " + config.ipAddress + ":" + std::to_string(config.port));
+        LogStatus("Successfully bound to " + config.ipAddress + ":" + std::to_string(config.port));
+        LogStatus("Socket ready for receiving UDP packets");
         return true;
     }
     
     void Stop() {
         running = false;
+        // Give the listener thread time to exit gracefully
+        Sleep(200);
+        
         if (udpSocket != INVALID_SOCKET) {
             closesocket(udpSocket);
             udpSocket = INVALID_SOCKET;
@@ -99,6 +131,8 @@ public:
         sockaddr_in clientAddr;
         int clientAddrSize = sizeof(clientAddr);
         
+        LogStatus("Starting UDP listener thread");
+        
         while (running) {
             fd_set readSet;
             FD_ZERO(&readSet);
@@ -107,30 +141,63 @@ public:
             timeval timeout = {0, 100000}; // 100ms timeout
             int result = select(0, &readSet, nullptr, nullptr, &timeout);
             
+            if (!running) break; // Check if we should stop
+            
             if (result > 0 && FD_ISSET(udpSocket, &readSet)) {
                 int bytesReceived = recvfrom(udpSocket, buffer, sizeof(buffer), 0, 
                                            (SOCKADDR*)&clientAddr, &clientAddrSize);
                 
                 if (bytesReceived > 0) {
+                    char clientIP[INET_ADDRSTRLEN];
+                    inet_ntop(AF_INET, &clientAddr.sin_addr, clientIP, INET_ADDRSTRLEN);
+                    LogStatus("Received " + std::to_string(bytesReceived) + " bytes from " + 
+                             std::string(clientIP) + ":" + std::to_string(ntohs(clientAddr.sin_port)));
                     ProcessOSCData(buffer, bytesReceived);
+                } else if (bytesReceived == SOCKET_ERROR) {
+                    int error = WSAGetLastError();
+                    if (error != WSAEWOULDBLOCK && running) {
+                        LogStatus("recvfrom error: " + std::to_string(error));
+                    }
+                }
+            } else if (result == SOCKET_ERROR) {
+                int error = WSAGetLastError();
+                if (running) {
+                    LogStatus("select error: " + std::to_string(error));
+                    break;
                 }
             }
         }
+        
+        LogStatus("UDP listener thread stopped");
     }
     
     void ProcessOSCData(const char* data, int length) {
-        if (length >= 8 && strncmp(data, "#bundle", 7) == 0) {
+        LogStatus("Processing " + std::to_string(length) + " bytes");
+        
+        // Show raw data for debugging
+        std::string hexData = "";
+        for (int i = 0; i < (length < 32 ? length : 32); i++) {
+            char hex[4];
+            sprintf(hex, "%02X ", (unsigned char)data[i]);
+            hexData += hex;
+        }
+        LogStatus("Raw data: " + hexData);
+        
+        if (length >= 8 && memcmp(data, "#bundle", 7) == 0 && data[7] == 0) {
+            LogStatus("Processing OSC bundle");
             ProcessBundle(data, length);
         } else {
+            LogStatus("Processing single OSC message");
             ProcessMessage(data, length);
         }
     }
     
     void ProcessBundle(const char* data, int length) {
-        int pos = 16;
-        while (pos < length) {
-            if (pos + 4 > length) break;
-            
+        int pos = 16; // Skip bundle header and timetag
+        int messageCount = 0;
+        
+        while (pos + 4 <= length) {
+            // Read element size (big-endian)
             uint32_t elementSize = 
                 (static_cast<uint8_t>(data[pos]) << 24) |
                 (static_cast<uint8_t>(data[pos + 1]) << 16) |
@@ -138,47 +205,81 @@ public:
                 static_cast<uint8_t>(data[pos + 3]);
             
             pos += 4;
-            if (pos + elementSize > length) break;
             
+            if (elementSize == 0 || pos + elementSize > length) {
+                break;
+            }
+            
+            LogStatus("Bundle message " + std::to_string(++messageCount) + " size: " + std::to_string(elementSize));
             ProcessMessage(data + pos, elementSize);
             pos += elementSize;
         }
     }
     
     void ProcessMessage(const char* data, int length) {
-        if (length > 20 && strstr(data, config.oscAddress.c_str()) != nullptr) {
-            if (CheckTargetValue(data, length)) {
+        if (length < 4) return;
+        
+        // Find the OSC address
+        const char* addressEnd = (const char*)memchr(data, 0, length);
+        if (!addressEnd) return;
+        
+        std::string address(data);
+        LogStatus("OSC Address: " + address);
+        
+        if (address != config.oscAddress) {
+            return;
+        }
+        
+        // Calculate padding for address
+        int addressLen = addressEnd - data + 1;
+        int addressPadding = ((addressLen + 3) & ~3) - addressLen;
+        int typeTagPos = addressLen + addressPadding;
+        
+        if (typeTagPos + 2 > length) return;
+        
+        // Check type tag
+        if (data[typeTagPos] != ',') {
+            LogStatus("No type tag found");
+            return;
+        }
+        
+        char typeTag = data[typeTagPos + 1];
+        LogStatus("Type tag: " + std::string(1, typeTag));
+        
+        // Calculate type tag padding
+        int typeTagLen = 2; // ",i" or ",f"
+        while (typeTagPos + typeTagLen < length && data[typeTagPos + typeTagLen] != 0) {
+            typeTagLen++;
+        }
+        if (data[typeTagPos + typeTagLen] == 0) typeTagLen++; // Include null terminator
+        
+        int typeTagPadding = ((typeTagLen + 3) & ~3) - typeTagLen;
+        int valuePos = typeTagPos + typeTagLen + typeTagPadding;
+        
+        if (valuePos + 4 > length) {
+            LogStatus("Not enough data for value");
+            return;
+        }
+        
+        // Read value (big-endian)
+        uint32_t rawValue = 
+            (static_cast<uint8_t>(data[valuePos]) << 24) |
+            (static_cast<uint8_t>(data[valuePos + 1]) << 16) |
+            (static_cast<uint8_t>(data[valuePos + 2]) << 8) |
+            static_cast<uint8_t>(data[valuePos + 3]);
+        
+        if (typeTag == 'i') {
+            int32_t value = static_cast<int32_t>(rawValue);
+            LogStatus("Integer value: " + std::to_string(value) + ", target: " + std::to_string(config.targetValue));
+            if (value == config.targetValue) {
                 TriggerButton();
             }
-        }
-    }
-    
-    bool CheckTargetValue(const char* data, int length) {
-        const char* addr = strstr(data, config.oscAddress.c_str());
-        if (!addr) return false;
-        
-        int addrLen = strlen(addr) + 1;
-        int padded = (addrLen + 3) & ~3;
-        int pos = (addr - data) + padded;
-        
-        if (pos + 4 > length || data[pos] != ',') return false;
-        if (data[pos + 1] != 'i' && data[pos + 1] != 'f') return false;
-        
-        pos += 4;
-        if (pos + 4 > length) return false;
-        
-        uint32_t rawValue = 
-            (static_cast<uint8_t>(data[pos]) << 24) |
-            (static_cast<uint8_t>(data[pos + 1]) << 16) |
-            (static_cast<uint8_t>(data[pos + 2]) << 8) |
-            static_cast<uint8_t>(data[pos + 3]);
-        
-        if (data[pos - 3] == 'i') {
-            int32_t value = static_cast<int32_t>(rawValue);
-            return value == config.targetValue;
-        } else {
+        } else if (typeTag == 'f') {
             float value = *reinterpret_cast<float*>(&rawValue);
-            return (value > config.targetValue - 0.01f && value < config.targetValue + 0.01f);
+            LogStatus("Float value: " + std::to_string(value) + ", target: " + std::to_string(config.targetValue));
+            if (fabs(value - config.targetValue) < 0.01f) {
+                TriggerButton();
+            }
         }
     }
     
@@ -207,12 +308,19 @@ public:
     
     void LogStatus(const std::string& message) {
         if (statusEdit) {
-            std::string timeStr = "[" + std::to_string(GetTickCount() / 1000) + "s] ";
+            SYSTEMTIME st;
+            GetLocalTime(&st);
+            char timeStr[32];
+            sprintf(timeStr, "[%02d:%02d:%02d.%03d] ", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+            
             std::string fullMessage = timeStr + message + "\r\n";
             
             int len = GetWindowTextLength(statusEdit);
             SendMessage(statusEdit, EM_SETSEL, len, len);
             SendMessage(statusEdit, EM_REPLACESEL, FALSE, (LPARAM)fullMessage.c_str());
+            
+            // Auto-scroll to bottom
+            SendMessage(statusEdit, EM_SCROLL, SB_BOTTOM, 0);
         }
     }
     
@@ -331,8 +439,9 @@ void ParseKeyString(const std::string& keyString, Config& config) {
 
 std::string GetWindowText(HWND hwnd) {
     int len = GetWindowTextLength(hwnd);
-    std::string result(len, 0);
+    std::string result(len + 1, 0);
     GetWindowTextA(hwnd, &result[0], len + 1);
+    result.resize(len);
     return result;
 }
 
@@ -428,7 +537,9 @@ void StopListener(HWND hwnd) {
         g_trigger->Stop();
         
         if (g_listenerThread) {
-            g_listenerThread->join();
+            if (g_listenerThread->joinable()) {
+                g_listenerThread->join();
+            }
             delete g_listenerThread;
             g_listenerThread = nullptr;
         }
@@ -659,7 +770,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             // IP Address
             CreateWindowA("STATIC", "IP Address:", WS_VISIBLE | WS_CHILD,
                         10, 40, 100, 20, hwnd, nullptr, nullptr, nullptr);
-            CreateWindowA("EDIT", "127.0.0.1", WS_VISIBLE | WS_CHILD | WS_BORDER,
+            CreateWindowA("EDIT", "0.0.0.0", WS_VISIBLE | WS_CHILD | WS_BORDER,
                         120, 40, 100, 20, hwnd, (HMENU)ID_IP_EDIT, nullptr, nullptr);
             
             // Port
@@ -705,7 +816,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             // Status
             CreateWindowA("STATIC", "Status:", WS_VISIBLE | WS_CHILD,
                         10, 260, 100, 20, hwnd, nullptr, nullptr, nullptr);
-            CreateWindowA("EDIT", "", WS_VISIBLE | WS_CHILD | WS_BORDER | WS_VSCROLL | ES_MULTILINE | ES_READONLY,
+            CreateWindowA("EDIT", "", WS_VISIBLE | WS_CHILD | WS_BORDER | WS_VSCROLL | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL,
                         10, 280, 420, 150, hwnd, (HMENU)ID_STATUS_EDIT, nullptr, nullptr);
             
             EnableWindow(GetDlgItem(hwnd, ID_STOP_BUTTON), FALSE);
