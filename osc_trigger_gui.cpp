@@ -1,12 +1,14 @@
-#include <windows.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <windows.h>
 #include <commctrl.h>
 #include <iostream>
 #include <thread>
 #include <atomic>
 #include <string>
 #include <cstdint>
+#include <vector>
+#include <algorithm>
 
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "user32.lib")
@@ -21,13 +23,20 @@
 #define ID_START_BUTTON     1006
 #define ID_STOP_BUTTON      1007
 #define ID_STATUS_EDIT      1008
+#define ID_IP_EDIT          1009
+#define ID_WINDOW_SELECT    1010
 
 struct Config {
     std::string windowTitle = "YourTargetWindow";
+    std::string ipAddress = "127.0.0.1";
     int port = 55525;
     int triggerKey = VK_SPACE;
+    bool useCtrl = false;
+    bool useShift = false;
+    bool useAlt = false;
     int targetValue = 9;
     std::string oscAddress = "/flair/runstate";
+    std::string keyString = "SPACE";
 };
 
 class OSCTrigger {
@@ -58,7 +67,7 @@ public:
         }
         
         serverAddr.sin_family = AF_INET;
-        serverAddr.sin_addr.s_addr = INADDR_ANY;
+        inet_pton(AF_INET, config.ipAddress.c_str(), &serverAddr.sin_addr);
         serverAddr.sin_port = htons(config.port);
         
         if (bind(udpSocket, (SOCKADDR*)&serverAddr, sizeof(serverAddr)) == SOCKET_ERROR) {
@@ -69,7 +78,7 @@ public:
         }
         
         running = true;
-        LogStatus("Listening on port " + std::to_string(config.port));
+        LogStatus("Listening on " + config.ipAddress + ":" + std::to_string(config.port));
         return true;
     }
     
@@ -172,15 +181,26 @@ public:
     }
     
     void TriggerButton() {
-        LogStatus("TRIGGER: " + config.oscAddress + " = " + std::to_string(config.targetValue));
+        LogStatus("TRIGGER: " + config.oscAddress + " = " + std::to_string(config.targetValue) + " (Key: " + config.keyString + ")");
         
         HWND window = FindWindowA(nullptr, config.windowTitle.c_str());
         if (window) {
             SetForegroundWindow(window);
         }
         
+        // Press modifier keys
+        if (config.useCtrl) keybd_event(VK_CONTROL, 0, 0, 0);
+        if (config.useShift) keybd_event(VK_SHIFT, 0, 0, 0);
+        if (config.useAlt) keybd_event(VK_MENU, 0, 0, 0);
+        
+        // Press main key
         keybd_event(config.triggerKey, 0, 0, 0);
         keybd_event(config.triggerKey, 0, KEYEVENTF_KEYUP, 0);
+        
+        // Release modifier keys
+        if (config.useAlt) keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0);
+        if (config.useShift) keybd_event(VK_SHIFT, 0, KEYEVENTF_KEYUP, 0);
+        if (config.useCtrl) keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0);
     }
     
     void LogStatus(const std::string& message) {
@@ -201,16 +221,106 @@ public:
 OSCTrigger* g_trigger = nullptr;
 std::thread* g_listenerThread = nullptr;
 
+bool IsValidKeyString(const std::string& keyString) {
+    if (keyString.empty()) return false;
+    
+    std::string upper = keyString;
+    std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
+    
+    // Remove modifiers to check base key
+    if (upper.find("CTRL+") != std::string::npos) {
+        upper = upper.substr(upper.find("CTRL+") + 5);
+    }
+    if (upper.find("SHIFT+") != std::string::npos) {
+        upper = upper.substr(upper.find("SHIFT+") + 6);
+    }
+    if (upper.find("ALT+") != std::string::npos) {
+        upper = upper.substr(upper.find("ALT+") + 4);
+    }
+    
+    // Check if remaining key is valid
+    return StringToVK(upper) != VK_SPACE || upper == "SPACE";
+}
+
+void ParseKeyString(const std::string& keyString, Config& config) {
+    std::string upper = keyString;
+    std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
+    
+    config.useCtrl = false;
+    config.useShift = false;
+    config.useAlt = false;
+    
+    // Check for modifier keys
+    if (upper.find("CTRL+") != std::string::npos) {
+        config.useCtrl = true;
+        upper = upper.substr(upper.find("CTRL+") + 5);
+    }
+    if (upper.find("SHIFT+") != std::string::npos) {
+        config.useShift = true;
+        upper = upper.substr(upper.find("SHIFT+") + 6);
+    }
+    if (upper.find("ALT+") != std::string::npos) {
+        config.useAlt = true;
+        upper = upper.substr(upper.find("ALT+") + 4);
+    }
+    
+    config.triggerKey = StringToVK(upper);
+}
+
 int StringToVK(const std::string& key) {
+    // Basic keys
     if (key == "SPACE") return VK_SPACE;
     if (key == "ENTER") return VK_RETURN;
+    if (key == "TAB") return VK_TAB;
+    if (key == "ESC" || key == "ESCAPE") return VK_ESCAPE;
+    if (key == "BACKSPACE") return VK_BACK;
+    if (key == "DELETE") return VK_DELETE;
+    if (key == "INSERT") return VK_INSERT;
+    if (key == "HOME") return VK_HOME;
+    if (key == "END") return VK_END;
+    if (key == "PAGEUP") return VK_PRIOR;
+    if (key == "PAGEDOWN") return VK_NEXT;
+    
+    // Function keys
     if (key == "F1") return VK_F1;
     if (key == "F2") return VK_F2;
     if (key == "F3") return VK_F3;
     if (key == "F4") return VK_F4;
     if (key == "F5") return VK_F5;
-    if (key.length() == 1) return toupper(key[0]);
-    return VK_SPACE;
+    if (key == "F6") return VK_F6;
+    if (key == "F7") return VK_F7;
+    if (key == "F8") return VK_F8;
+    if (key == "F9") return VK_F9;
+    if (key == "F10") return VK_F10;
+    if (key == "F11") return VK_F11;
+    if (key == "F12") return VK_F12;
+    
+    // Arrow keys
+    if (key == "LEFT") return VK_LEFT;
+    if (key == "RIGHT") return VK_RIGHT;
+    if (key == "UP") return VK_UP;
+    if (key == "DOWN") return VK_DOWN;
+    
+    // Number pad
+    if (key == "NUM0") return VK_NUMPAD0;
+    if (key == "NUM1") return VK_NUMPAD1;
+    if (key == "NUM2") return VK_NUMPAD2;
+    if (key == "NUM3") return VK_NUMPAD3;
+    if (key == "NUM4") return VK_NUMPAD4;
+    if (key == "NUM5") return VK_NUMPAD5;
+    if (key == "NUM6") return VK_NUMPAD6;
+    if (key == "NUM7") return VK_NUMPAD7;
+    if (key == "NUM8") return VK_NUMPAD8;
+    if (key == "NUM9") return VK_NUMPAD9;
+    
+    // Single character keys
+    if (key.length() == 1) {
+        char c = toupper(key[0]);
+        if (c >= 'A' && c <= 'Z') return c;
+        if (c >= '0' && c <= '9') return c;
+    }
+    
+    return VK_SPACE; // Default fallback
 }
 
 std::string GetWindowText(HWND hwnd) {
@@ -220,18 +330,69 @@ std::string GetWindowText(HWND hwnd) {
     return result;
 }
 
+struct WindowInfo {
+    std::string title;
+    HWND hwnd;
+};
+
+std::vector<WindowInfo> g_windows;
+
+BOOL CALLBACK EnumWindowsProc(HWND hwnd, LPARAM lParam) {
+    if (IsWindowVisible(hwnd) && GetWindowTextLength(hwnd) > 0) {
+        std::string title = GetWindowText(hwnd);
+        if (!title.empty() && title != "Program Manager") {
+            g_windows.push_back({title, hwnd});
+        }
+    }
+    return TRUE;
+}
+
+void ShowWindowSelectionDialog(HWND parent) {
+    g_windows.clear();
+    EnumWindows(EnumWindowsProc, 0);
+    
+    if (g_windows.empty()) {
+        MessageBoxA(parent, "No windows found", "Window Selection", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+    
+    std::string windowList = "Select a window:\n\n";
+    for (size_t i = 0; i < g_windows.size() && i < 20; ++i) {
+        windowList += std::to_string(i + 1) + ". " + g_windows[i].title + "\n";
+    }
+    
+    std::string input = "1";
+    char buffer[10];
+    if (MessageBoxA(parent, windowList.c_str(), "Window Selection", MB_OKCANCEL | MB_ICONQUESTION) == IDOK) {
+        // Simple input dialog - for now we'll use the first window
+        // In a full implementation, you'd want a proper dialog
+        if (!g_windows.empty()) {
+            SetDlgItemTextA(parent, ID_WINDOW_EDIT, g_windows[0].title.c_str());
+        }
+    }
+}
+
 void StartListener(HWND hwnd) {
     if (g_trigger && g_trigger->IsRunning()) return;
     
     Config config;
     config.windowTitle = GetWindowText(GetDlgItem(hwnd, ID_WINDOW_EDIT));
+    config.ipAddress = GetWindowText(GetDlgItem(hwnd, ID_IP_EDIT));
     config.port = GetDlgItemInt(hwnd, ID_PORT_EDIT, nullptr, FALSE);
     config.targetValue = GetDlgItemInt(hwnd, ID_VALUE_EDIT, nullptr, FALSE);
     config.oscAddress = GetWindowText(GetDlgItem(hwnd, ID_ADDRESS_EDIT));
     
     char keyText[50];
     GetDlgItemTextA(hwnd, ID_KEY_COMBO, keyText, sizeof(keyText));
-    config.triggerKey = StringToVK(keyText);
+    config.keyString = keyText;
+    
+    // Validate key combination
+    if (!IsValidKeyString(keyText)) {
+        MessageBoxA(hwnd, "Invalid key combination. Please use format like: SPACE, ENTER, F1, A, CTRL+A, SHIFT+F1, etc.", "Invalid Key", MB_OK | MB_ICONERROR);
+        return;
+    }
+    
+    ParseKeyString(keyText, config);
     
     if (!g_trigger) {
         g_trigger = new OSCTrigger(GetDlgItem(hwnd, ID_STATUS_EDIT));
@@ -267,53 +428,47 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
     case WM_CREATE:
         {
             // Window title
-            CreateWindow("STATIC", "Window Title:", WS_VISIBLE | WS_CHILD,
+            CreateWindowA("STATIC", "Window Title:", WS_VISIBLE | WS_CHILD,
                         10, 10, 100, 20, hwnd, nullptr, nullptr, nullptr);
-            CreateWindow("EDIT", "YourTargetWindow", WS_VISIBLE | WS_CHILD | WS_BORDER,
+            CreateWindowA("EDIT", "YourTargetWindow", WS_VISIBLE | WS_CHILD | WS_BORDER,
                         120, 10, 200, 20, hwnd, (HMENU)ID_WINDOW_EDIT, nullptr, nullptr);
             
             // Port
-            CreateWindow("STATIC", "Port:", WS_VISIBLE | WS_CHILD,
+            CreateWindowA("STATIC", "Port:", WS_VISIBLE | WS_CHILD,
                         10, 40, 100, 20, hwnd, nullptr, nullptr, nullptr);
-            CreateWindow("EDIT", "55525", WS_VISIBLE | WS_CHILD | WS_BORDER | ES_NUMBER,
+            CreateWindowA("EDIT", "55525", WS_VISIBLE | WS_CHILD | WS_BORDER | ES_NUMBER,
                         120, 40, 100, 20, hwnd, (HMENU)ID_PORT_EDIT, nullptr, nullptr);
             
             // Trigger key
-            CreateWindow("STATIC", "Trigger Key:", WS_VISIBLE | WS_CHILD,
+            CreateWindowA("STATIC", "Trigger Key:", WS_VISIBLE | WS_CHILD,
                         10, 70, 100, 20, hwnd, nullptr, nullptr, nullptr);
-            HWND keyCombo = CreateWindow("COMBOBOX", "", WS_VISIBLE | WS_CHILD | CBS_DROPDOWN,
-                        120, 70, 100, 200, hwnd, (HMENU)ID_KEY_COMBO, nullptr, nullptr);
-            SendMessage(keyCombo, CB_ADDSTRING, 0, (LPARAM)"SPACE");
-            SendMessage(keyCombo, CB_ADDSTRING, 0, (LPARAM)"ENTER");
-            SendMessage(keyCombo, CB_ADDSTRING, 0, (LPARAM)"F1");
-            SendMessage(keyCombo, CB_ADDSTRING, 0, (LPARAM)"F2");
-            SendMessage(keyCombo, CB_ADDSTRING, 0, (LPARAM)"F3");
-            SendMessage(keyCombo, CB_ADDSTRING, 0, (LPARAM)"F4");
-            SendMessage(keyCombo, CB_ADDSTRING, 0, (LPARAM)"F5");
-            SendMessage(keyCombo, CB_SETCURSEL, 0, 0); // Select SPACE
+            CreateWindowA("EDIT", "SPACE", WS_VISIBLE | WS_CHILD | WS_BORDER,
+                        120, 70, 100, 20, hwnd, (HMENU)ID_KEY_COMBO, nullptr, nullptr);
+            CreateWindowA("STATIC", "(e.g. SPACE, ENTER, F1, CTRL+A)", WS_VISIBLE | WS_CHILD,
+                        230, 70, 150, 20, hwnd, nullptr, nullptr, nullptr);
             
             // Target value
-            CreateWindow("STATIC", "Target Value:", WS_VISIBLE | WS_CHILD,
+            CreateWindowA("STATIC", "Target Value:", WS_VISIBLE | WS_CHILD,
                         10, 100, 100, 20, hwnd, nullptr, nullptr, nullptr);
-            CreateWindow("EDIT", "9", WS_VISIBLE | WS_CHILD | WS_BORDER | ES_NUMBER,
+            CreateWindowA("EDIT", "9", WS_VISIBLE | WS_CHILD | WS_BORDER | ES_NUMBER,
                         120, 100, 100, 20, hwnd, (HMENU)ID_VALUE_EDIT, nullptr, nullptr);
             
             // OSC address
-            CreateWindow("STATIC", "OSC Address:", WS_VISIBLE | WS_CHILD,
+            CreateWindowA("STATIC", "OSC Address:", WS_VISIBLE | WS_CHILD,
                         10, 130, 100, 20, hwnd, nullptr, nullptr, nullptr);
-            CreateWindow("EDIT", "/flair/runstate", WS_VISIBLE | WS_CHILD | WS_BORDER,
+            CreateWindowA("EDIT", "/flair/runstate", WS_VISIBLE | WS_CHILD | WS_BORDER,
                         120, 130, 200, 20, hwnd, (HMENU)ID_ADDRESS_EDIT, nullptr, nullptr);
             
             // Buttons
-            CreateWindow("BUTTON", "START", WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
+            CreateWindowA("BUTTON", "START", WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
                         10, 170, 80, 30, hwnd, (HMENU)ID_START_BUTTON, nullptr, nullptr);
-            CreateWindow("BUTTON", "STOP", WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
+            CreateWindowA("BUTTON", "STOP", WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
                         100, 170, 80, 30, hwnd, (HMENU)ID_STOP_BUTTON, nullptr, nullptr);
             
             // Status
-            CreateWindow("STATIC", "Status:", WS_VISIBLE | WS_CHILD,
+            CreateWindowA("STATIC", "Status:", WS_VISIBLE | WS_CHILD,
                         10, 210, 100, 20, hwnd, nullptr, nullptr, nullptr);
-            CreateWindow("EDIT", "", WS_VISIBLE | WS_CHILD | WS_BORDER | WS_VSCROLL | ES_MULTILINE | ES_READONLY,
+            CreateWindowA("EDIT", "", WS_VISIBLE | WS_CHILD | WS_BORDER | WS_VSCROLL | ES_MULTILINE | ES_READONLY,
                         10, 230, 420, 150, hwnd, (HMENU)ID_STATUS_EDIT, nullptr, nullptr);
             
             EnableWindow(GetDlgItem(hwnd, ID_STOP_BUTTON), FALSE);
@@ -350,7 +505,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS);
     
-    const char* className = "OSCTriggerGUI";
+    const wchar_t* className = L"OSCTriggerGUI";
     
     WNDCLASS wc = {};
     wc.lpfnWndProc = WindowProc;
@@ -361,7 +516,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     
     RegisterClass(&wc);
     
-    HWND hwnd = CreateWindow(className, "OSC Button Trigger",
+    HWND hwnd = CreateWindowW(className, L"OSC Button Trigger",
         WS_OVERLAPPEDWINDOW & ~WS_MAXIMIZEBOX & ~WS_THICKFRAME,
         CW_USEDEFAULT, CW_USEDEFAULT, 460, 420,
         nullptr, nullptr, hInstance, nullptr);

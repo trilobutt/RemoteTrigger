@@ -7,8 +7,11 @@
             "command": "cmd",
             "args": [
                 "/c",
-                "\"\"C:\\Program Files\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Auxiliary\\Build\\vcvars64.bat\" && cl /O2 /MT /EHsc /DWIN32 /D_WINDOWS osc_trigger_gui.cpp /link ws2_32.lib user32.lib comctl32.lib /SUBSYSTEM:WINDOWS\""
+                "\"\"C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\Common7\\Tools\\VsDevCmd.bat\" && cl /O2 /MT /EHsc /DWIN32 /D_WINDOWS osc_trigger_gui.cpp /link ws2_32.lib user32.lib comctl32.lib /SUBSYSTEM:WINDOWS\""
             ],
+            "options": {
+                "cwd": "F:\\RemoteTrigger"
+            },
             "group": {
                 "kind": "build",
                 "isDefault": true
