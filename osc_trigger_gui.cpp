@@ -28,6 +28,7 @@
 #define ID_WINDOW_SELECT    1010
 #define ID_KEY_CAPTURE      1011
 #define ID_KEY_DISPLAY      1012
+#define ID_CONTINUOUS_CHECK 1013
 
 struct Config {
     std::string windowTitle = "YourTargetWindow";
@@ -40,6 +41,7 @@ struct Config {
     int targetValue = 9;
     std::string oscAddress = "/flair/runstate";
     std::string keyString = "SPACE";
+    bool continuousMode = false;
 };
 
 class OSCTrigger {
@@ -112,7 +114,11 @@ public:
         hasTriggered = false;
         LogStatus("Successfully bound to " + config.ipAddress + ":" + std::to_string(config.port));
         LogStatus("Socket ready for receiving UDP packets");
-        LogStatus("One-shot mode: Will trigger once then stop listening");
+        if (config.continuousMode) {
+            LogStatus("Continuous mode: Will trigger repeatedly on each match");
+        } else {
+            LogStatus("One-shot mode: Will trigger once then stop listening");
+        }
         return true;
     }
     
@@ -280,7 +286,10 @@ public:
             int32_t value = static_cast<int32_t>(rawValue);
             LogStatus("Integer value: " + std::to_string(value) + ", target: " + std::to_string(config.targetValue));
             if (value == config.targetValue) {
-                if (!hasTriggered) {
+                if (config.continuousMode) {
+                    TriggerButton();
+                    LogStatus("Continuous mode trigger activated");
+                } else if (!hasTriggered) {
                     TriggerButton();
                     hasTriggered = true;
                     LogStatus("One-shot trigger activated - stopping listener");
@@ -293,7 +302,10 @@ public:
             float value = *reinterpret_cast<float*>(&rawValue);
             LogStatus("Float value: " + std::to_string(value) + ", target: " + std::to_string(config.targetValue));
             if (fabs(value - config.targetValue) < 0.01f) {
-                if (!hasTriggered) {
+                if (config.continuousMode) {
+                    TriggerButton();
+                    LogStatus("Continuous mode trigger activated");
+                } else if (!hasTriggered) {
                     TriggerButton();
                     hasTriggered = true;
                     LogStatus("One-shot trigger activated - stopping listener");
@@ -527,6 +539,7 @@ void StartListener(HWND hwnd) {
     config.port = GetDlgItemInt(hwnd, ID_PORT_EDIT, nullptr, FALSE);
     config.targetValue = GetDlgItemInt(hwnd, ID_VALUE_EDIT, nullptr, FALSE);
     config.oscAddress = GetWindowText(GetDlgItem(hwnd, ID_ADDRESS_EDIT));
+    config.continuousMode = (SendMessage(GetDlgItem(hwnd, ID_CONTINUOUS_CHECK), BM_GETCHECK, 0, 0) == BST_CHECKED);
     
     char keyText[50];
     GetDlgItemTextA(hwnd, ID_KEY_EDIT, keyText, sizeof(keyText));
@@ -720,7 +733,13 @@ void ResizeControls(HWND hwnd) {
     SetWindowPos(GetDlgItem(hwnd, ID_ADDRESS_EDIT), nullptr,
                 rightColX, currentY, controlWidth, controlHeight,
                 SWP_NOZORDER);
-    currentY += controlHeight + spacing * 2;
+    currentY += controlHeight + spacing;
+    
+    // Continuous mode checkbox
+    SetWindowPos(GetDlgItem(hwnd, ID_CONTINUOUS_CHECK), nullptr,
+                margin, currentY, controlWidth, controlHeight,
+                SWP_NOZORDER);
+    currentY += controlHeight + spacing;
     
     // Buttons
     SetWindowPos(GetDlgItem(hwnd, ID_START_BUTTON), nullptr,
@@ -831,17 +850,21 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             CreateWindowA("EDIT", "/flair/runstate", WS_VISIBLE | WS_CHILD | WS_BORDER,
                         120, 185, 200, 20, hwnd, (HMENU)ID_ADDRESS_EDIT, nullptr, nullptr);
             
+            // Continuous mode checkbox
+            CreateWindowA("BUTTON", "Continuous Listening Mode", WS_VISIBLE | WS_CHILD | BS_AUTOCHECKBOX,
+                        10, 215, 200, 20, hwnd, (HMENU)ID_CONTINUOUS_CHECK, nullptr, nullptr);
+            
             // Buttons
             CreateWindowA("BUTTON", "START", WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
-                        10, 220, 80, 30, hwnd, (HMENU)ID_START_BUTTON, nullptr, nullptr);
+                        10, 245, 80, 30, hwnd, (HMENU)ID_START_BUTTON, nullptr, nullptr);
             CreateWindowA("BUTTON", "STOP", WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
-                        100, 220, 80, 30, hwnd, (HMENU)ID_STOP_BUTTON, nullptr, nullptr);
+                        100, 245, 80, 30, hwnd, (HMENU)ID_STOP_BUTTON, nullptr, nullptr);
             
             // Status
             CreateWindowA("STATIC", "Status:", WS_VISIBLE | WS_CHILD,
-                        10, 260, 100, 20, hwnd, nullptr, nullptr, nullptr);
+                        10, 285, 100, 20, hwnd, nullptr, nullptr, nullptr);
             CreateWindowA("EDIT", "", WS_VISIBLE | WS_CHILD | WS_BORDER | WS_VSCROLL | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL,
-                        10, 280, 420, 150, hwnd, (HMENU)ID_STATUS_EDIT, nullptr, nullptr);
+                        10, 305, 420, 150, hwnd, (HMENU)ID_STATUS_EDIT, nullptr, nullptr);
             
             EnableWindow(GetDlgItem(hwnd, ID_STOP_BUTTON), FALSE);
             

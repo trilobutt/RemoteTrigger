@@ -1,11 +1,11 @@
 # OSC Trigger GUI
 
-A Windows C++ application that listens for OSC (Open Sound Control) messages and triggers keyboard events when specific values are received. Features a one-shot trigger mechanism that stops listening after the first successful match.
+A Windows C++ application that listens for OSC (Open Sound Control) messages and triggers keyboard events when specific values are received. Features both one-shot and continuous trigger modes for flexible automation workflows.
 
 ## Features
 
 - **OSC Message Processing**: Handles both individual OSC messages and OSC bundles
-- **One-Shot Triggering**: Triggers once per session then stops automatically
+- **Flexible Trigger Modes**: Choose between one-shot (trigger once then stop) or continuous (trigger repeatedly) modes
 - **Configurable IP Binding**: Listen on specific IP addresses or all interfaces (0.0.0.0)
 - **Window Targeting**: Target specific application windows by exact title match
 - **Advanced Key Combinations**: Support for modifier keys (Ctrl, Shift, Alt) and special keys
@@ -18,7 +18,8 @@ A Windows C++ application that listens for OSC (Open Sound Control) messages and
 2. **Select Target**: Choose target window from dropdown or refresh to update list
 3. **Configure IP**: Set IP address (use `0.0.0.0` for all interfaces, `127.0.0.1` for localhost)
 4. **Set Parameters**: Configure port, trigger key, target value, and OSC address
-5. **Start**: Click "START" to begin listening (will stop after first trigger)
+5. **Choose Mode**: Check "Continuous Listening Mode" for repeated triggers, or leave unchecked for one-shot
+6. **Start**: Click "START" to begin listening
 
 ## Configuration Options
 
@@ -31,6 +32,7 @@ A Windows C++ application that listens for OSC (Open Sound Control) messages and
 - **Trigger Key**: Key combination to send (supports modifiers like `CTRL+A`, `SHIFT+F1`)
 - **Target Value**: Integer value that triggers the action (default: `9`)
 - **OSC Address**: OSC address pattern to match (default: `/flair/runstate`)
+- **Continuous Mode**: Enable for repeated triggers, disable for one-shot behavior
 
 ### Supported Key Formats
 - **Basic Keys**: `SPACE`, `ENTER`, `TAB`, `ESC`, `A`-`Z`, `0`-`9`
@@ -117,14 +119,23 @@ Ctrl+Shift+P → Tasks: Run Task → build-gui
 - Network source information (IP:port) for received messages
 - Detailed OSC message parsing steps
 
-## One-Shot Behavior
+## Trigger Modes
 
-This application is designed for single-trigger use cases:
-1. Starts listening when "START" is clicked
-2. Processes OSC messages until target value is matched
-3. Sends configured key combination to target window
-4. Automatically stops listening after first successful trigger
-5. Requires manual restart for additional triggers
+### One-Shot Mode (Default)
+- Triggers once per session then stops automatically
+- Requires manual restart for additional triggers
+- Ideal for single-event automation
+
+### Continuous Mode
+- Triggers repeatedly on each OSC value match
+- Continues listening until manually stopped
+- Perfect for ongoing automation workflows
+
+**Usage:**
+1. Check "Continuous Listening Mode" checkbox for repeated triggers
+2. Leave unchecked for traditional one-shot behavior
+3. Click "START" to begin listening
+4. In continuous mode, click "STOP" to end the session
 
 ## Contributing
 
