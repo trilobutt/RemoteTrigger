@@ -146,15 +146,15 @@ public:
         
         LogStatus("Starting UDP listener thread");
         
-        while (running) {
+        while (running && udpSocket != INVALID_SOCKET) {
             fd_set readSet;
             FD_ZERO(&readSet);
             FD_SET(udpSocket, &readSet);
             
-            timeval timeout = {0, 100000}; // 100ms timeout
+            timeval timeout = {0, 50000}; // 50ms timeout for more responsive shutdown
             int result = select(0, &readSet, nullptr, nullptr, &timeout);
             
-            if (!running) break; // Check if we should stop
+            if (!running || udpSocket == INVALID_SOCKET) break; // Check if we should stop
             
             if (result > 0 && FD_ISSET(udpSocket, &readSet)) {
                 int bytesReceived = recvfrom(udpSocket, buffer, sizeof(buffer), 0, 
@@ -549,24 +549,11 @@ void StopListener(HWND hwnd) {
     if (g_trigger) {
         g_trigger->Stop();
         
-        if (g_listenerThread) {
-            // Wait for thread to finish with timeout
-            if (g_listenerThread->joinable()) {
-                // Give thread up to 2 seconds to exit gracefully
-                auto future = std::async(std::launch::async, [&]() {
-                    g_listenerThread->join();
-                });
-                
-                if (future.wait_for(std::chrono::seconds(2)) == std::future_status::timeout) {
-                    // Thread didn't exit gracefully, but we can't force terminate in C++11
-                    // Log the issue but continue cleanup
-                    if (g_trigger) {
-                        g_trigger->LogStatus("Warning: Thread did not exit gracefully");
-                    }
-                }
-            }
-            g_listenerThread.reset();
+        if (g_listenerThread && g_listenerThread->joinable()) {
+            // Simple join - the Stop() call should make the thread exit quickly
+            g_listenerThread->join();
         }
+        g_listenerThread.reset();
         
         // Cleanup WSA after thread is safely stopped
         WSACleanup();
