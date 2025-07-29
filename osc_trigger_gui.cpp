@@ -10,6 +10,9 @@
 #include <vector>
 #include <algorithm>
 #include <cstring>
+#include <memory>
+#include <future>
+#include <chrono>
 
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "user32.lib")
@@ -133,10 +136,6 @@ public:
             udpSocket = INVALID_SOCKET;
         }
         
-        // Give the listener thread time to exit gracefully
-        Sleep(300);
-        
-        WSACleanup();
         LogStatus("Stopped");
     }
     
@@ -171,13 +170,17 @@ public:
                     int error = WSAGetLastError();
                     if (error != WSAEWOULDBLOCK && running) {
                         LogStatus("recvfrom error: " + std::to_string(error));
+                        // Don't break here - continue trying to receive
                     }
                 }
             } else if (result == SOCKET_ERROR) {
                 int error = WSAGetLastError();
-                if (running) {
+                if (running && error != WSAEINTR) {
                     LogStatus("select error: " + std::to_string(error));
-                    break;
+                    // Only break on critical errors, not interruption
+                    if (error != WSAENOTSOCK) {
+                        break;
+                    }
                 }
             }
         }
@@ -418,8 +421,8 @@ int StringToVK(const std::string& key) {
 }
 
 // Global variables
-OSCTrigger* g_trigger = nullptr;
-std::thread* g_listenerThread = nullptr;
+std::unique_ptr<OSCTrigger> g_trigger = nullptr;
+std::unique_ptr<std::thread> g_listenerThread = nullptr;
 bool g_capturingKey = false;
 HWND g_keyEditHwnd = nullptr;
 WNDPROC g_originalKeyEditProc = nullptr;
@@ -554,11 +557,11 @@ void StartListener(HWND hwnd) {
     ParseKeyString(keyText, config);
     
     if (!g_trigger) {
-        g_trigger = new OSCTrigger(GetDlgItem(hwnd, ID_STATUS_EDIT));
+        g_trigger = std::make_unique<OSCTrigger>(GetDlgItem(hwnd, ID_STATUS_EDIT));
     }
     
     if (g_trigger->Start(config)) {
-        g_listenerThread = new std::thread([hwnd]{
+        g_listenerThread = std::make_unique<std::thread>([hwnd]{
             g_trigger->Listen();
             // Auto-stop when listener thread exits (after one-shot trigger)
             PostMessage(hwnd, WM_COMMAND, MAKEWPARAM(ID_STOP_BUTTON, 0), 0);
@@ -574,12 +577,26 @@ void StopListener(HWND hwnd) {
         g_trigger->Stop();
         
         if (g_listenerThread) {
+            // Wait for thread to finish with timeout
             if (g_listenerThread->joinable()) {
-                g_listenerThread->join();
+                // Give thread up to 2 seconds to exit gracefully
+                auto future = std::async(std::launch::async, [&]() {
+                    g_listenerThread->join();
+                });
+                
+                if (future.wait_for(std::chrono::seconds(2)) == std::future_status::timeout) {
+                    // Thread didn't exit gracefully, but we can't force terminate in C++11
+                    // Log the issue but continue cleanup
+                    if (g_trigger) {
+                        g_trigger->LogStatus("Warning: Thread did not exit gracefully");
+                    }
+                }
             }
-            delete g_listenerThread;
-            g_listenerThread = nullptr;
+            g_listenerThread.reset();
         }
+        
+        // Cleanup WSA after thread is safely stopped
+        WSACleanup();
         
         EnableWindow(GetDlgItem(hwnd, ID_START_BUTTON), TRUE);
         EnableWindow(GetDlgItem(hwnd, ID_STOP_BUTTON), FALSE);
@@ -913,10 +930,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
         
     case WM_CLOSE:
         StopListener(hwnd);
-        if (g_trigger) {
-            delete g_trigger;
-            g_trigger = nullptr;
-        }
+        g_trigger.reset();
         DestroyWindow(hwnd);
         break;
         
