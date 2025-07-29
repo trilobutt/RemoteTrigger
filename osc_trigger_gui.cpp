@@ -161,10 +161,6 @@ public:
                                            (SOCKADDR*)&clientAddr, &clientAddrSize);
                 
                 if (bytesReceived > 0) {
-                    char clientIP[INET_ADDRSTRLEN];
-                    inet_ntop(AF_INET, &clientAddr.sin_addr, clientIP, INET_ADDRSTRLEN);
-                    LogStatus("Received " + std::to_string(bytesReceived) + " bytes from " + 
-                             std::string(clientIP) + ":" + std::to_string(ntohs(clientAddr.sin_port)));
                     ProcessOSCData(buffer, bytesReceived);
                 } else if (bytesReceived == SOCKET_ERROR) {
                     int error = WSAGetLastError();
@@ -189,22 +185,9 @@ public:
     }
     
     void ProcessOSCData(const char* data, int length) {
-        LogStatus("Processing " + std::to_string(length) + " bytes");
-        
-        // Show raw data for debugging
-        std::string hexData = "";
-        for (int i = 0; i < (length < 32 ? length : 32); i++) {
-            char hex[4];
-            sprintf(hex, "%02X ", (unsigned char)data[i]);
-            hexData += hex;
-        }
-        LogStatus("Raw data: " + hexData);
-        
         if (length >= 8 && memcmp(data, "#bundle", 7) == 0 && data[7] == 0) {
-            LogStatus("Processing OSC bundle");
             ProcessBundle(data, length);
         } else {
-            LogStatus("Processing single OSC message");
             ProcessMessage(data, length);
         }
     }
@@ -227,7 +210,7 @@ public:
                 break;
             }
             
-            LogStatus("Bundle message " + std::to_string(++messageCount) + " size: " + std::to_string(elementSize));
+            messageCount++;
             ProcessMessage(data + pos, elementSize);
             pos += elementSize;
         }
@@ -241,7 +224,6 @@ public:
         if (!addressEnd) return;
         
         std::string address(data);
-        LogStatus("OSC Address: " + address);
         
         if (address != config.oscAddress) {
             return;
@@ -256,12 +238,10 @@ public:
         
         // Check type tag
         if (data[typeTagPos] != ',') {
-            LogStatus("No type tag found");
             return;
         }
         
         char typeTag = data[typeTagPos + 1];
-        LogStatus("Type tag: " + std::string(1, typeTag));
         
         // Calculate type tag padding
         int typeTagLen = 2; // ",i" or ",f"
@@ -274,7 +254,6 @@ public:
         int valuePos = typeTagPos + typeTagLen + typeTagPadding;
         
         if (valuePos + 4 > length) {
-            LogStatus("Not enough data for value");
             return;
         }
         
@@ -287,34 +266,28 @@ public:
         
         if (typeTag == 'i') {
             int32_t value = static_cast<int32_t>(rawValue);
-            LogStatus("Integer value: " + std::to_string(value) + ", target: " + std::to_string(config.targetValue));
             if (value == config.targetValue) {
                 if (config.continuousMode) {
                     TriggerButton();
-                    LogStatus("Continuous mode trigger activated");
+                    LogStatus("Triggered: " + config.oscAddress + " = " + std::to_string(value));
                 } else if (!hasTriggered) {
                     TriggerButton();
                     hasTriggered = true;
                     LogStatus("One-shot trigger activated - stopping listener");
                     running = false;
-                } else {
-                    LogStatus("Target value matched but already triggered once - ignoring");
                 }
             }
         } else if (typeTag == 'f') {
             float value = *reinterpret_cast<float*>(&rawValue);
-            LogStatus("Float value: " + std::to_string(value) + ", target: " + std::to_string(config.targetValue));
             if (fabs(value - config.targetValue) < 0.01f) {
                 if (config.continuousMode) {
                     TriggerButton();
-                    LogStatus("Continuous mode trigger activated");
+                    LogStatus("Triggered: " + config.oscAddress + " = " + std::to_string(value));
                 } else if (!hasTriggered) {
                     TriggerButton();
                     hasTriggered = true;
                     LogStatus("One-shot trigger activated - stopping listener");
                     running = false;
-                } else {
-                    LogStatus("Target value matched but already triggered once - ignoring");
                 }
             }
         }
